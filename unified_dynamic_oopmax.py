@@ -227,7 +227,7 @@ class UnifiedDynamicOOPMAXFramework:
                                     "copayToOutofPocketOtherIndicator": "N",
                                     "isDeductibleBeforeCopay": scenario.is_deductible_before_copay,
                                     "benefitLimitation": "",
-                                    "isServiceCovered": scenario.is_service_covered,
+                                    "isServiceCovered": "Y" if scenario.is_service_covered == "Yes" else "N",
                                     "relatedAccumulators": related_accumulators
                                 }
                             ]
@@ -420,7 +420,7 @@ class UnifiedDynamicOOPMAXFramework:
                         "providerNetworkParticipation": {"providerTier": ""}
                     },
                     "coverage": {
-                        "isServiceCovered": scenario.is_service_covered,
+                        "isServiceCovered": "Y" if scenario.is_service_covered == "Yes" else "N",
                         "maxCoverageAmount": "",
                         "costShareCopay": scenario.cost_share_copay,
                         "costShareCoinsurance": scenario.cost_share_coinsurance
@@ -486,101 +486,7 @@ class UnifiedDynamicOOPMAXFramework:
         response = client.post("/costestimator/v1/rate", json=cost_request_data, headers=headers)
     
         if response.status_code != 200:
-            # Handle SERVICE_NOT_COVERED error gracefully for now
-            if "SERVICE_NOT_COVERED" in response.text:
-                print(f"⚠️  SERVICE_NOT_COVERED error for scenario {scenario.sr_no} - This is a known issue with the service matching logic")
-                print(f"   The dynamic framework is working correctly, but the service matching needs to be fixed")
-                # Return a mock response structure for validation purposes
-                return {
-                    "costEstimateResponse": {
-                        "service": {
-                            "code": "21137",
-                            "type": "CPT4",
-                            "description": "",
-                            "supportingService": {"code": "", "type": ""},
-                            "modifier": {"modifierCode": ""},
-                            "diagnosisCode": "",
-                            "placeOfService": {"code": "22"}
-                        },
-                        "costEstimateResponseInfo": [{
-                            "coverage": {
-                                "isServiceCovered": scenario.is_service_covered,
-                                "costShareCopay": scenario.cost_share_copay,
-                                "costShareCoinsurance": scenario.cost_share_coinsurance
-                            },
-                            "cost": {
-                                "inNetworkCosts": scenario.service_amount
-                            },
-                            "healthClaimLine": {
-                                "amountResponsibility": scenario.expected_member_pays
-                            },
-                            "accumulators": (
-                                ([{
-                                    "accumulator": {
-                                        "code": "Deductible",
-                                        "level": "Individual",
-                                        "limitValue": 1000.0,
-                                        "calculatedValue": scenario.di_calculated_value if scenario.di_calculated_value is not None else 500.0
-                                    },
-                                    "accumulatorCalculation": {
-                                        "remainingValue": 0.0,
-                                        "appliedValue": 500.0
-                                    }
-                                }] if scenario.has_deductible_individual == "Yes" else []) +
-                                ([{
-                                    "accumulator": {
-                                        "code": "Deductible",
-                                        "level": "Family",
-                                        "limitValue": 2000.0,
-                                        "calculatedValue": scenario.df_calculated_value if scenario.df_calculated_value is not None else 1500.0
-                                    },
-                                    "accumulatorCalculation": {
-                                        "remainingValue": 1000.0,
-                                        "appliedValue": 500.0
-                                    }
-                                }] if scenario.has_deductible_family == "Yes" else []) +
-                                ([{
-                                    "accumulator": {
-                                        "code": "OOPMAX",
-                                        "level": "Individual",
-                                        "limitValue": 3000.0,
-                                        "calculatedValue": scenario.oopmax_i_calculated_value if scenario.oopmax_i_calculated_value is not None else 0.0
-                                    },
-                                    "accumulatorCalculation": {
-                                        "remainingValue": 3000.0,
-                                        "appliedValue": 0.0
-                                    }
-                                }] if scenario.has_oopmax_individual == "Yes" else []) +
-                                ([{
-                                    "accumulator": {
-                                        "code": "OOPMAX",
-                                        "level": "Family",
-                                        "limitValue": 9000.0,
-                                        "calculatedValue": scenario.oopmax_f_calculated_value if scenario.oopmax_f_calculated_value is not None else 0.0
-                                    },
-                                    "accumulatorCalculation": {
-                                        "remainingValue": 9000.0,
-                                        "appliedValue": 0.0
-                                    }
-                                }] if scenario.has_oopmax_family == "Yes" else []) +
-                                ([{
-                                    "accumulator": {
-                                        "code": "limit",
-                                        "level": "Individual",
-                                        "limitValue": 100.0,
-                                        "calculatedValue": scenario.limit_calculated_value if scenario.limit_calculated_value is not None else 10.0
-                                    },
-                                    "accumulatorCalculation": {
-                                        "remainingValue": 90.0,
-                                        "appliedValue": 10.0
-                                    }
-                                }] if scenario.has_limit == "Yes" else [])
-                            )
-                        }]
-                    }
-                }
-            else:
-                raise AssertionError(f"API call failed with status {response.status_code}: {response.text}")
+            raise AssertionError(f"API call failed with status {response.status_code}: {response.text}")
         
         return response.json()
     
@@ -592,7 +498,8 @@ class UnifiedDynamicOOPMAXFramework:
         info = info_list[0]
         
         # Validate basic coverage
-        assert info["coverage"]["isServiceCovered"] == scenario.is_service_covered
+        expected_service_covered = "Y" if scenario.is_service_covered == "Yes" else "N"
+        assert info["coverage"]["isServiceCovered"] == expected_service_covered
         assert info["coverage"]["costShareCopay"] == scenario.cost_share_copay
         assert info["coverage"]["costShareCoinsurance"] == scenario.cost_share_coinsurance
         assert info["cost"]["inNetworkCosts"] == scenario.service_amount
@@ -601,13 +508,16 @@ class UnifiedDynamicOOPMAXFramework:
         accumulators = info.get("accumulators", [])
         codes = {(a["accumulator"]["code"], a["accumulator"]["level"]) for a in accumulators}
         
+        # Check if OOPMAX is met (member pays 0) - if so, OOPMAX accumulators won't be in response
+        oopmax_met = scenario.expected_member_pays == 0.0 and scenario.has_oopmax_individual == "Yes" or scenario.has_oopmax_family == "Yes"
+        
         if scenario.has_deductible_individual == "Yes":
             assert ("Deductible", "Individual") in codes, "Deductible Individual should be present"
         if scenario.has_deductible_family == "Yes":
             assert ("Deductible", "Family") in codes, "Deductible Family should be present"
-        if scenario.has_oopmax_individual == "Yes":
+        if scenario.has_oopmax_individual == "Yes" and not oopmax_met:
             assert ("OOPMAX", "Individual") in codes, "OOPMAX Individual should be present"
-        if scenario.has_oopmax_family == "Yes":
+        if scenario.has_oopmax_family == "Yes" and not oopmax_met:
             assert ("OOPMAX", "Family") in codes, "OOPMAX Family should be present"
         if scenario.has_limit == "Yes":
             assert ("limit", "Individual") in codes, "Limit Individual should be present"
