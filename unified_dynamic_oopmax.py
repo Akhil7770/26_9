@@ -23,7 +23,8 @@ from app.schemas.benefit_response import BenefitApiResponse
 from app.schemas.accumulator_response import AccumulatorResponse
 
 # Global Configuration Variables
-GENERATED_DATA_FOLDER = "tests/generated_oopmax_data"
+CSV_FILE_PATH = "tests/api/oopmax_scenarios.csv"
+JSON_FILE_PATH = "tests/generated_oopmax_data"
 GENERATE_JSON_FILES = True  # Set to False to disable JSON file generation
 
 
@@ -64,7 +65,7 @@ class ScenarioConfig:
 class UnifiedDynamicOOPMAXFramework:
     """Unified framework that does everything in one place."""
     
-    def __init__(self, csv_file_path: str = "tests/api/oopmax_scenarios.csv"):
+    def __init__(self, csv_file_path: str = CSV_FILE_PATH):
         self.csv_file_path = csv_file_path
         self.scenarios = self._load_scenarios_from_csv()
     
@@ -327,18 +328,12 @@ class UnifiedDynamicOOPMAXFramework:
         }
     
     
-    def _make_api_call(self, cost_request_data: Dict[str, Any], scenario: ScenarioConfig) -> Dict[str, Any]:
+    def _make_api_call(self, cost_request: Dict[str, Any], benefit_response: Dict[str, Any], accumulator_response: Dict[str, Any], scenario: ScenarioConfig) -> Dict[str, Any]:
         """Make API call with mocked services and return response."""
         from unittest.mock import patch
         from app.models.rate_criteria import NegotiatedRate
         from app.schemas.benefit_response import BenefitApiResponse
         from app.schemas.accumulator_response import AccumulatorResponse
-
-        cost_request = self._generate_cost_request(scenario)
-
-        # Generate mock data
-        benefit_response = self._generate_benefit_response(scenario)
-        accumulator_response = self._generate_accumulator_response(scenario)
         
         # Build mock services
         benefit_api_response = BenefitApiResponse(**benefit_response)
@@ -353,7 +348,7 @@ class UnifiedDynamicOOPMAXFramework:
             # Configure mocks
             mock_token.return_value = "mock_token"
             mock_benefit.return_value = benefit_api_response
-            mock_accumulator.return_value = accumulator_response
+            mock_accumulator.return_value = accumulator_api_response
             mock_rate.return_value = NegotiatedRate(
                 paymentMethod="AMT",
                 rate=scenario.service_amount,
@@ -369,18 +364,14 @@ class UnifiedDynamicOOPMAXFramework:
                 "x-global-transaction-id": f"oopmax-{scenario.sr_no}",
                 "x-clientrefid": f"oopmax-client-{scenario.sr_no}",
             }
-        
-        response = client.post("/costestimator/v1/rate", json=cost_request, headers=headers)
+            
+            response = client.post("/costestimator/v1/rate", json=cost_request, headers=headers)
 
         if response.status_code != 200:
             raise AssertionError(f"API call failed with status {response.status_code}: {response.text}")
         
         # Get the actual cost response from the API
         cost_response = response.json()
-        
-        # Save generated data with the actual API response
-        self.save_generated_data(scenario, cost_request, benefit_api_response, accumulator_api_response, cost_response)
-        
         return cost_response
     
 
@@ -422,15 +413,20 @@ class UnifiedDynamicOOPMAXFramework:
             calculated_value = a["accumulator"]["calculatedValue"]
             
             if code == "deductible" and level == "individual" and scenario.di_calculated_value is not None:
-                assert calculated_value == scenario.di_calculated_value, f"Deductible Individual calculatedValue should be {scenario.di_calculated_value}, got {calculated_value}"
+                expected_value = float(scenario.di_calculated_value) if isinstance(scenario.di_calculated_value, str) else scenario.di_calculated_value
+                assert calculated_value == expected_value, f"Deductible Individual calculatedValue should be {expected_value}, got {calculated_value}"
             elif code == "deductible" and level == "family" and scenario.df_calculated_value is not None:
-                assert calculated_value == scenario.df_calculated_value, f"Deductible Family calculatedValue should be {scenario.df_calculated_value}, got {calculated_value}"
-            elif code == "oop max" and level == "individual" and scenario.oopmax_i_calculated_value is not None:
-                assert calculated_value == scenario.oopmax_i_calculated_value, f"OOPMAX Individual calculatedValue should be {scenario.oopmax_i_calculated_value}, got {calculated_value}"
-            elif code == "oop max" and level == "family" and scenario.oopmax_f_calculated_value is not None:
-                assert calculated_value == scenario.oopmax_f_calculated_value, f"OOPMAX Family calculatedValue should be {scenario.oopmax_f_calculated_value}, got {calculated_value}"
+                expected_value = float(scenario.df_calculated_value) if isinstance(scenario.df_calculated_value, str) else scenario.df_calculated_value
+                assert calculated_value == expected_value, f"Deductible Family calculatedValue should be {expected_value}, got {calculated_value}"
+            elif code == "oopmax" and level == "individual" and scenario.oopmax_i_calculated_value is not None:
+                expected_value = float(scenario.oopmax_i_calculated_value) if isinstance(scenario.oopmax_i_calculated_value, str) else scenario.oopmax_i_calculated_value
+                assert calculated_value == expected_value, f"OOPMAX Individual calculatedValue should be {expected_value}, got {calculated_value}"
+            elif code == "oopmax" and level == "family" and scenario.oopmax_f_calculated_value is not None:
+                expected_value = float(scenario.oopmax_f_calculated_value) if isinstance(scenario.oopmax_f_calculated_value, str) else scenario.oopmax_f_calculated_value
+                assert calculated_value == expected_value, f"OOPMAX Family calculatedValue should be {expected_value}, got {calculated_value}"
             elif code == "limit" and level == "individual" and scenario.limit_calculated_value is not None:
-                assert calculated_value == scenario.limit_calculated_value, f"Limit Individual calculatedValue should be {scenario.limit_calculated_value}, got {calculated_value}"
+                expected_value = float(scenario.limit_calculated_value) if isinstance(scenario.limit_calculated_value, str) else scenario.limit_calculated_value
+                assert calculated_value == expected_value, f"Limit Individual calculatedValue should be {expected_value}, got {calculated_value}"
         
         # Validate health claim line
         health_claim_line = info.get("healthClaimLine", {})
@@ -443,17 +439,22 @@ class UnifiedDynamicOOPMAXFramework:
     
     def run_scenario_test(self, scenario: ScenarioConfig):
         """Run a single scenario test."""
+        # Generate cost request
+        cost_request = self._generate_cost_request(scenario)
+        benefit_response = self._generate_benefit_response(scenario)
+        accumulator_response = self._generate_accumulator_response(scenario)
+        
         # Make API call
-        response = self._make_api_call(scenario)
+        response = self._make_api_call(cost_request, benefit_response, accumulator_response, scenario)
 
         # Validate response
         self._validate_scenario_response(response, scenario)
 
-    def save_generated_data(self, scenario: ScenarioConfig, cost_request, benefit_response, accumulator_response, cost_response, output_dir: str = "tests/generated_oopmax_data"):
+    def save_generated_data(self, scenario: ScenarioConfig, cost_request, benefit_response, accumulator_response, cost_response):
         """Save generated test data to JSON files (optional)."""
         
-        # Create output directory
-        output_path = Path(output_dir) / f"scenario_{scenario.sr_no.replace('.', '_')}"
+        # Create output directory using global variable
+        output_path = Path(JSON_FILE_PATH) / f"scenario_{scenario.sr_no.replace('.', '_')}"
         output_path.mkdir(parents=True, exist_ok=True)
         
         # Save individual files
@@ -500,7 +501,7 @@ for scenario in framework.scenarios:
 def generate_all_test_data():
     """Generate test data for all scenarios from CSV."""
     print("Generating test data for all OOPMAX scenarios from CSV...")
-    print(f"Output folder: {GENERATED_DATA_FOLDER}")
+    print(f"Output folder: {JSON_FILE_PATH}")
     print(f"JSON generation: {'Enabled' if GENERATE_JSON_FILES else 'Disabled'}")
     
     for scenario in framework.scenarios:
@@ -509,25 +510,27 @@ def generate_all_test_data():
         print(f"   Service Amount: {scenario.service_amount}")
         print(f"   Logic: {scenario.logic}")
         
-        # Generate test data (cost_response will be generated by actual API call)
+        
+        # Generate test data
         cost_request = framework._generate_cost_request(scenario)
         benefit_response = framework._generate_benefit_response(scenario)
         accumulator_response = framework._generate_accumulator_response(scenario)
         
         # Make actual API call to get real cost response
         try:
-            cost_response = framework._make_api_call(cost_request, scenario)
+            cost_response = framework._make_api_call(cost_request,benefit_response, accumulator_response, scenario)
             print(f"API call successful - got actual cost response")
         except Exception as e:
             print(f"API call failed: {e}")
             # Create empty cost response for file generation
             cost_response = {"error": "API call failed", "message": str(e)}
         
-        # Save generated data
-        framework.save_generated_data(scenario, cost_request, benefit_response, accumulator_response, cost_response)
-        
+        # Save generated data (including error responses)
         if GENERATE_JSON_FILES:
+            framework.save_generated_data(scenario, cost_request, benefit_response, accumulator_response, cost_response)
             print(f"Generated: cost_request.json, benefit_response.json, accumulator_response.json, cost_response.json")
+        
+
 
 def run_all_scenarios():
     """Run all OOPMAX scenarios dynamically from CSV."""
