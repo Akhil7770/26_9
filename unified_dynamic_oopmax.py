@@ -22,6 +22,10 @@ from app.models.rate_criteria import NegotiatedRate
 from app.schemas.benefit_response import BenefitApiResponse
 from app.schemas.accumulator_response import AccumulatorResponse
 
+# Global Configuration Variables
+GENERATED_DATA_FOLDER = "tests/generated_oopmax_data"
+GENERATE_JSON_FILES = True  # Set to False to disable JSON file generation
+
 
 @dataclass
 class ScenarioConfig:
@@ -49,6 +53,8 @@ class ScenarioConfig:
     df_calculated_value: Optional[float]
     limit_calculated_value: Optional[float]
     limit_type: Optional[str]
+    num_of_individuals_met: Optional[int]
+    num_of_individuals_needed_to_meet: Optional[int]
     service_amount: float
     expected_member_pays: float
     logic: str
@@ -75,7 +81,7 @@ class UnifiedDynamicOOPMAXFramework:
                 scenario = ScenarioConfig(
                     sr_no=row['Sr No.'],
                     scenario_name=row['Scenario'],
-                    is_service_covered=row['isServiceCovered'],
+                    is_service_covered="Y" if row['isServiceCovered'].lower() == "yes" else "N",
                     has_limit=row['code = "limit"'],
                     has_oopmax_individual=row['code = "OOPMAX" , level="I"'],
                     has_oopmax_family=row['code = "OOPMAX" , level="F"'],
@@ -90,12 +96,14 @@ class UnifiedDynamicOOPMAXFramework:
                     copay_continue_when_deductible_met_indicator=row['copayContinueWhenDeductibleMetIndicator'],
                     copay_continue_when_out_of_pocket_max_met_indicator=row['copayContinueWhenOutOfPocketMaxMetIndicator'],
                     is_deductible_before_copay=row['isDeductibleBeforeCopay'],
-                    oopmax_i_calculated_value=self._parse_float(row['OOPMAXIcalculatedValue']),
-                    oopmax_f_calculated_value=self._parse_float(row['OOPMAXFcalculatedValue']),
-                    di_calculated_value=self._parse_float(row['DIcalculatedValue']),
-                    df_calculated_value=self._parse_float(row['DFcalculatedValue']),
-                    limit_calculated_value=self._parse_float(row['LimitcalculatedValue']),
+                    oopmax_i_calculated_value=self._parse_none(row['OOPMAXIcalculatedValue']),
+                    oopmax_f_calculated_value=self._parse_none(row['OOPMAXFcalculatedValue']),
+                    di_calculated_value=self._parse_none(row['DIcalculatedValue']),
+                    df_calculated_value=self._parse_none(row['DFcalculatedValue']),
+                    limit_calculated_value=self._parse_none(row['LimitcalculatedValue']),
                     limit_type=row['limitType'] if row['limitType'] != 'N/A' else None,
+                    num_of_individuals_met=self._parse_none(row['numOfIndividualsMet']),
+                    num_of_individuals_needed_to_meet=self._parse_none(row['numOfIndividualsNeededToMeet']),
                     service_amount=float(row['ServiceAmount']),
                     expected_member_pays=float(row['Expected Member_Pays']),
                     logic=row['Logic'],
@@ -104,15 +112,12 @@ class UnifiedDynamicOOPMAXFramework:
                 scenarios.append(scenario)
         
         return scenarios
-    
-    def _parse_float(self, value: str) -> Optional[float]:
+
+    def _parse_none(self, value: str):
         """Parse float value, handling N/A and empty strings."""
-        if value in ['N/A', '', None]:
+        if value in ['N/A', '', 'n/a', None]:
             return None
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            return None
+        return value
     
     def _generate_cost_request(self, scenario: ScenarioConfig) -> Dict[str, Any]:
         """Generate cost request JSON dynamically."""
@@ -157,31 +162,31 @@ class UnifiedDynamicOOPMAXFramework:
         related_accumulators = []
         
         # Add accumulators based on scenario configuration
-        if scenario.has_deductible_individual == "Yes":
+        if scenario.has_deductible_individual.lower() == "yes":
             related_accumulators.append({
                 "code": "Deductible", "level": "Individual", "deductibleCode": "",
                 "accumExCode": "L01", "networkIndicatorCode": "I"
             })
-        
-        if scenario.has_deductible_family == "Yes":
+
+        if scenario.has_deductible_family.lower() == "yes":
             related_accumulators.append({
                 "code": "Deductible", "level": "Family", "deductibleCode": "",
                 "accumExCode": "L04", "networkIndicatorCode": "I"
             })
-        
-        if scenario.has_oopmax_individual == "Yes":
+
+        if scenario.has_oopmax_individual.lower() == "yes":
             related_accumulators.append({
                 "code": "OOPMAX", "level": "Individual", "deductibleCode": "",
                 "accumExCode": "L03", "networkIndicatorCode": "I"
             })
-        
-        if scenario.has_oopmax_family == "Yes":
+
+        if scenario.has_oopmax_family.lower() == "yes":
             related_accumulators.append({
                 "code": "OOPMAX", "level": "Family", "deductibleCode": "",
                 "accumExCode": "L04", "networkIndicatorCode": "I"
             })
-        
-        if scenario.has_limit == "Yes":
+
+        if scenario.has_limit.lower() == "yes":
             related_accumulators.append({
                 "code": "limit", "level": "Individual", "deductibleCode": "",
                 "accumExCode": "L05", "networkIndicatorCode": "I"
@@ -214,20 +219,20 @@ class UnifiedDynamicOOPMAXFramework:
                                 {
                                     "sequenceNumber": 1,
                                     "benefitDescription": "MEDICAL ANCILLARY",
-                                    "costShareCopay": int(scenario.cost_share_copay),
-                                    "costShareCoinsurance": int(scenario.cost_share_coinsurance),
-                                    "copayAppliesOutOfPocket": scenario.copay_applies_out_of_pocket if scenario.copay_applies_out_of_pocket != "N/A" else "",
-                                    "coinsAppliesOutOfPocket": scenario.coins_applies_out_of_pocket if scenario.coins_applies_out_of_pocket != "N/A" else "",
-                                    "deductibleAppliesOutOfPocket": scenario.deductible_applies_out_of_pocket if scenario.deductible_applies_out_of_pocket != "N/A" else "",
-                                    "deductibleAppliesOutOfPocketOtherIndicator": "N",
+                                    "costShareCopay": scenario.cost_share_copay,
+                                    "costShareCoinsurance": scenario.cost_share_coinsurance,
+                                    "copayAppliesOutOfPocket": scenario.copay_applies_out_of_pocket,
+                                    "coinsAppliesOutOfPocket": scenario.coins_applies_out_of_pocket,
+                                    "deductibleAppliesOutOfPocket": scenario.deductible_applies_out_of_pocket,
+                                    "deductibleAppliesOutOfPocketOtherIndicator": "",
                                     "copayCountToDeductibleIndicator": scenario.copay_count_to_deductible_indicator,
                                     "copayContinueWhenDeductibleMetIndicator": scenario.copay_continue_when_deductible_met_indicator,
-                                    "copayContinueWhenOutOfPocketMaxMetIndicator": scenario.copay_continue_when_out_of_pocket_max_met_indicator if scenario.copay_continue_when_out_of_pocket_max_met_indicator != "N/A" else "",
-                                    "coinsuranceToOutOfPocketOtherIndicator": "N",
-                                    "copayToOutofPocketOtherIndicator": "N",
+                                    "copayContinueWhenOutOfPocketMaxMetIndicator": scenario.copay_continue_when_out_of_pocket_max_met_indicator,
+                                    "coinsuranceToOutOfPocketOtherIndicator": "",
+                                    "copayToOutofPocketOtherIndicator": "",
                                     "isDeductibleBeforeCopay": scenario.is_deductible_before_copay,
                                     "benefitLimitation": "",
-                                    "isServiceCovered": "Y" if scenario.is_service_covered == "Yes" else "N",
+                                    "isServiceCovered": scenario.is_service_covered,
                                     "relatedAccumulators": related_accumulators
                                 }
                             ]
@@ -248,7 +253,7 @@ class UnifiedDynamicOOPMAXFramework:
                 "suffix": "799047", "benefitProductType": "Medical", "description": "Deductible",
                 "currentValue": "0.00", "limitValue": "1000.00", "code": "Deductible",
                 "effectivePeriod": {"datetimeBegin": "2025-01-01", "datetimeEnd": "2025-12-31"},
-                "calculatedValue": scenario.di_calculated_value or 500.0,
+                "calculatedValue": scenario.di_calculated_value,
                 "savingsLevel": "In Network", "networkIndicator": "InNetwork",
                 "accumExCode": "L01", "networkIndicatorCode": "I"
             })
@@ -259,7 +264,7 @@ class UnifiedDynamicOOPMAXFramework:
                 "suffix": "799047", "benefitProductType": "Medical", "description": "Deductible",
                 "currentValue": "0.00", "limitValue": "2000.00", "code": "Deductible",
                 "effectivePeriod": {"datetimeBegin": "2025-01-01", "datetimeEnd": "2025-12-31"},
-                "calculatedValue": scenario.df_calculated_value or 1500.0,
+                "calculatedValue": scenario.df_calculated_value ,
                 "savingsLevel": "In Network", "networkIndicator": "InNetwork",
                 "accumExCode": "L04", "networkIndicatorCode": "I"
             })
@@ -281,7 +286,7 @@ class UnifiedDynamicOOPMAXFramework:
                 "suffix": "799047", "benefitProductType": "Medical", "description": "OOPMAX",
                 "currentValue": "0.00", "limitValue": "9000.00", "code": "OOPMAX",
                 "effectivePeriod": {"datetimeBegin": "2025-01-01", "datetimeEnd": "2025-12-31"},
-                "calculatedValue": scenario.oopmax_f_calculated_value or 0.0,
+                "calculatedValue": scenario.oopmax_f_calculated_value,
                 "savingsLevel": "In Network", "networkIndicator": "InNetwork",
                 "accumExCode": "L04", "networkIndicatorCode": "I"
             })
@@ -292,7 +297,7 @@ class UnifiedDynamicOOPMAXFramework:
                 "suffix": "799047", "benefitProductType": "Medical", "description": "limit",
                 "currentValue": "0.00", "limitValue": "100.00", "code": "limit",
                 "effectivePeriod": {"datetimeBegin": "2025-01-01", "datetimeEnd": "2025-12-31"},
-                "calculatedValue": scenario.limit_calculated_value or 10.0,
+                "calculatedValue": scenario.limit_calculated_value,
                 "savingsLevel": "In Network", "networkIndicator": "InNetwork",
                 "accumExCode": "L05", "networkIndicatorCode": "I"
             }
@@ -321,126 +326,6 @@ class UnifiedDynamicOOPMAXFramework:
             }
         }
     
-    def _generate_cost_response(self, scenario: ScenarioConfig) -> Dict[str, Any]:
-        """Generate cost response JSON dynamically (mock response for validation purposes)."""
-        # Generate accumulators for the response
-        response_accumulators = []
-        
-        if scenario.has_deductible_individual == "Yes":
-            response_accumulators.append({
-                "accumulator": {
-                    "code": "Deductible",
-                    "level": "Individual",
-                    "limitValue": 1000.0,
-                    "calculatedValue": scenario.di_calculated_value if scenario.di_calculated_value is not None else 500.0
-                },
-                "accumulatorCalculation": {
-                    "remainingValue": 0.0,
-                    "appliedValue": 500.0
-                }
-            })
-        
-        if scenario.has_deductible_family == "Yes":
-            response_accumulators.append({
-                "accumulator": {
-                    "code": "Deductible",
-                    "level": "Family",
-                    "limitValue": 2000.0,
-                    "calculatedValue": scenario.df_calculated_value if scenario.df_calculated_value is not None else 1500.0
-                },
-                "accumulatorCalculation": {
-                    "remainingValue": 1000.0,
-                    "appliedValue": 500.0
-                }
-            })
-        
-        if scenario.has_oopmax_individual == "Yes":
-            response_accumulators.append({
-                "accumulator": {
-                    "code": "OOPMAX",
-                    "level": "Individual",
-                    "limitValue": 3000.0,
-                    "calculatedValue": scenario.oopmax_i_calculated_value if scenario.oopmax_i_calculated_value is not None else 0.0
-                },
-                "accumulatorCalculation": {
-                    "remainingValue": 3000.0,
-                    "appliedValue": 0.0
-                }
-            })
-        
-        if scenario.has_oopmax_family == "Yes":
-            response_accumulators.append({
-                "accumulator": {
-                    "code": "OOPMAX",
-                    "level": "Family",
-                    "limitValue": 9000.0,
-                    "calculatedValue": scenario.oopmax_f_calculated_value if scenario.oopmax_f_calculated_value is not None else 0.0
-                },
-                "accumulatorCalculation": {
-                    "remainingValue": 9000.0,
-                    "appliedValue": 0.0
-                }
-            })
-        
-        if scenario.has_limit == "Yes":
-            response_accumulators.append({
-                "accumulator": {
-                    "code": "limit",
-                    "level": "Individual",
-                    "limitValue": 100.0,
-                    "calculatedValue": scenario.limit_calculated_value if scenario.limit_calculated_value is not None else 10.0
-                },
-                "accumulatorCalculation": {
-                    "remainingValue": 90.0,
-                    "appliedValue": 10.0
-                }
-            })
-        
-        return {
-            "costEstimateResponse": {
-                "service": {
-                    "code": "21137",
-                    "type": "CPT4",
-                    "description": "",
-                    "supportingService": {"code": "", "type": ""},
-                    "modifier": {"modifierCode": ""},
-                    "diagnosisCode": "",
-                    "placeOfService": {"code": "22"}
-                },
-                "costEstimateResponseInfo": [{
-                    "providerInfo": {
-                        "serviceLocation": "0003543634",
-                        "providerType": "HO",
-                        "speciality": {"code": ""},
-                        "taxIdentificationNumber": "",
-                        "taxIdQualifier": "",
-                        "providerNetworks": {"networkID": "00387"},
-                        "providerIdentificationNumber": "0006170130",
-                        "nationalProviderId": "",
-                        "providerNetworkParticipation": {"providerTier": ""}
-                    },
-                    "coverage": {
-                        "isServiceCovered": "Y" if scenario.is_service_covered == "Yes" else "N",
-                        "maxCoverageAmount": "",
-                        "costShareCopay": scenario.cost_share_copay,
-                        "costShareCoinsurance": scenario.cost_share_coinsurance
-                    },
-                    "cost": {
-                        "inNetworkCosts": scenario.service_amount,
-                        "outOfNetworkCosts": 0.0,
-                        "inNetworkCostsType": "AMOUNT"
-                    },
-                    "healthClaimLine": {
-                        "amountCopay": scenario.cost_share_copay,
-                        "amountCoinsurance": scenario.cost_share_coinsurance * scenario.service_amount / 100 if scenario.cost_share_coinsurance > 0 else 0,
-                        "amountResponsibility": scenario.expected_member_pays,
-                        "percentResponsibility": 0.0,
-                        "amountpayable": scenario.service_amount - scenario.expected_member_pays
-                    },
-                    "accumulators": response_accumulators
-                }]
-            }
-        }
     
     def _make_api_call(self, cost_request_data: Dict[str, Any], scenario: ScenarioConfig) -> Dict[str, Any]:
         """Make API call with mocked services and return response."""
@@ -448,15 +333,17 @@ class UnifiedDynamicOOPMAXFramework:
         from app.models.rate_criteria import NegotiatedRate
         from app.schemas.benefit_response import BenefitApiResponse
         from app.schemas.accumulator_response import AccumulatorResponse
-        
+
+        cost_request = self._generate_cost_request(scenario)
+
         # Generate mock data
-        benefit_response_data = self._generate_benefit_response(scenario)
-        accumulator_response_data = self._generate_accumulator_response(scenario)
+        benefit_response = self._generate_benefit_response(scenario)
+        accumulator_response = self._generate_accumulator_response(scenario)
         
         # Build mock services
-        benefit_api_response = BenefitApiResponse(**benefit_response_data)
-        accumulator_response = AccumulatorResponse(**accumulator_response_data)
-        
+        benefit_api_response = BenefitApiResponse(**benefit_response)
+        accumulator_api_response = AccumulatorResponse(**accumulator_response)
+
         # Mock external services
         with patch('app.services.impl.benefit_service_impl.BenefitServiceImpl.get_benefit') as mock_benefit, \
              patch('app.services.impl.accumulator_service_impl.AccumulatorServiceImpl.get_accumulator') as mock_accumulator, \
@@ -483,13 +370,20 @@ class UnifiedDynamicOOPMAXFramework:
                 "x-clientrefid": f"oopmax-client-{scenario.sr_no}",
             }
         
-        response = client.post("/costestimator/v1/rate", json=cost_request_data, headers=headers)
-    
+        response = client.post("/costestimator/v1/rate", json=cost_request, headers=headers)
+
         if response.status_code != 200:
             raise AssertionError(f"API call failed with status {response.status_code}: {response.text}")
         
-        return response.json()
+        # Get the actual cost response from the API
+        cost_response = response.json()
+        
+        # Save generated data with the actual API response
+        self.save_generated_data(scenario, cost_request, benefit_api_response, accumulator_api_response, cost_response)
+        
+        return cost_response
     
+
     def _validate_scenario_response(self, response: Dict[str, Any], scenario: ScenarioConfig):
         """Validate API response against scenario expectations."""
         # Extract response info
@@ -498,8 +392,7 @@ class UnifiedDynamicOOPMAXFramework:
         info = info_list[0]
         
         # Validate basic coverage
-        expected_service_covered = "Y" if scenario.is_service_covered == "Yes" else "N"
-        assert info["coverage"]["isServiceCovered"] == expected_service_covered
+        assert info["coverage"]["isServiceCovered"] == scenario.is_service_covered 
         assert info["coverage"]["costShareCopay"] == scenario.cost_share_copay
         assert info["coverage"]["costShareCoinsurance"] == scenario.cost_share_coinsurance
         assert info["cost"]["inNetworkCosts"] == scenario.service_amount
@@ -550,47 +443,14 @@ class UnifiedDynamicOOPMAXFramework:
     
     def run_scenario_test(self, scenario: ScenarioConfig):
         """Run a single scenario test."""
-        # Generate test data dynamically
-        cost_request_data = self._generate_cost_request(scenario)
-        benefit_response_data = self._generate_benefit_response(scenario)
-        accumulator_response_data = self._generate_accumulator_response(scenario)
-        
-        # Build mock services
-        benefit_api_response = BenefitApiResponse(**benefit_response_data)
-        accumulator_response = AccumulatorResponse(**accumulator_response_data)
-        
-        # Mock external services
-        with patch('app.services.impl.benefit_service_impl.BenefitServiceImpl.get_benefit') as mock_benefit, \
-             patch('app.services.impl.accumulator_service_impl.AccumulatorServiceImpl.get_accumulator') as mock_accumulator, \
-             patch('app.repository.impl.cost_estimator_repository_impl.CostEstimatorRepositoryImpl.get_rate') as mock_rate, \
-             patch('app.core.session_manager.SessionManager.get_token') as mock_token:
-            
-            # Configure mocks
-            mock_token.return_value = "mock_token"
-            mock_benefit.return_value = benefit_api_response
-            mock_accumulator.return_value = accumulator_response
-            mock_rate.return_value = NegotiatedRate(
-                paymentMethod="AMT",
-                rate=scenario.service_amount,
-                rateType="AMOUNT",
-                isRateFound=True,
-                isProviderInfoFound=True,
-            )
+        # Make API call
+        response = self._make_api_call(scenario)
 
-            # Make API call
-            response = self._make_api_call(cost_request_data, scenario)
-            
-            # Validate response
-            self._validate_scenario_response(response, scenario)
-    
-    def save_generated_data(self, scenario: ScenarioConfig, output_dir: str = "tests/generated_oopmax_data"):
+        # Validate response
+        self._validate_scenario_response(response, scenario)
+
+    def save_generated_data(self, scenario: ScenarioConfig, cost_request, benefit_response, accumulator_response, cost_response, output_dir: str = "tests/generated_oopmax_data"):
         """Save generated test data to JSON files (optional)."""
-        cost_request = self._generate_cost_request(scenario)
-        benefit_response = self._generate_benefit_response(scenario)
-        accumulator_response = self._generate_accumulator_response(scenario)
-        
-        # Generate cost response (mock response for validation purposes)
-        cost_response = self._generate_cost_response(scenario)
         
         # Create output directory
         output_path = Path(output_dir) / f"scenario_{scenario.sr_no.replace('.', '_')}"
@@ -609,8 +469,6 @@ class UnifiedDynamicOOPMAXFramework:
         with open(output_path / "cost_response.json", 'w') as f:
             json.dump(cost_response, f, indent=2)
         
-        print(f"Generated test data saved to: {output_path}")
-        return cost_request, benefit_response, accumulator_response, cost_response
 
 
 # Initialize framework
@@ -637,39 +495,55 @@ for scenario in framework.scenarios:
     globals()[test_func.__name__] = test_func
 
 
-# Utility functions
+
+
 def generate_all_test_data():
     """Generate test data for all scenarios from CSV."""
-    print("🚀 Generating test data for all OOPMAX scenarios from CSV...")
+    print("Generating test data for all OOPMAX scenarios from CSV...")
+    print(f"Output folder: {GENERATED_DATA_FOLDER}")
+    print(f"JSON generation: {'Enabled' if GENERATE_JSON_FILES else 'Disabled'}")
     
     for scenario in framework.scenarios:
-        print(f"\n📋 Processing Scenario {scenario.sr_no}: {scenario.scenario_name}")
+        print(f"\nProcessing Scenario {scenario.sr_no}: {scenario.scenario_name}")
         print(f"   Expected Member Pays: {scenario.expected_member_pays}")
         print(f"   Service Amount: {scenario.service_amount}")
         print(f"   Logic: {scenario.logic}")
         
-        # Generate and save test data
-        framework.save_generated_data(scenario)
+        # Generate test data (cost_response will be generated by actual API call)
+        cost_request = framework._generate_cost_request(scenario)
+        benefit_response = framework._generate_benefit_response(scenario)
+        accumulator_response = framework._generate_accumulator_response(scenario)
         
-        print(f"   ✅ Generated: cost_request.json, benefit_response.json, accumulator_response.json, cost_response.json")
-
+        # Make actual API call to get real cost response
+        try:
+            cost_response = framework._make_api_call(cost_request, scenario)
+            print(f"API call successful - got actual cost response")
+        except Exception as e:
+            print(f"API call failed: {e}")
+            # Create empty cost response for file generation
+            cost_response = {"error": "API call failed", "message": str(e)}
+        
+        # Save generated data
+        framework.save_generated_data(scenario, cost_request, benefit_response, accumulator_response, cost_response)
+        
+        if GENERATE_JSON_FILES:
+            print(f"Generated: cost_request.json, benefit_response.json, accumulator_response.json, cost_response.json")
 
 def run_all_scenarios():
     """Run all OOPMAX scenarios dynamically from CSV."""
-    print("🚀 Running all OOPMAX scenarios dynamically from CSV...")
+    print("Running all OOPMAX scenarios dynamically from CSV...")
     
     for scenario in framework.scenarios:
-        print(f"\n🧪 Running Scenario {scenario.sr_no}: {scenario.scenario_name}")
+        print(f"\nRunning Scenario {scenario.sr_no}: {scenario.scenario_name}")
         framework.run_scenario_test(scenario)
-        print(f"✅ Scenario {scenario.sr_no} passed!")
+        print(f"Scenario {scenario.sr_no} passed!")
 
 
-# Test functions
+
 @pytest.mark.asyncio
 async def test_generate_all_scenarios():
     """Generate test data for all scenarios from CSV."""
     generate_all_test_data()
-
 
 @pytest.mark.asyncio
 async def test_all_oopmax_scenarios_unified():
